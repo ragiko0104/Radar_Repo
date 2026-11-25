@@ -48,10 +48,11 @@ newDelay2 = (110-1)/fs;
 assert(abs((newRange-oldRange)+0.75) < 1e-9);
 assert(abs(newVelocity-oldVelocity) < 1e-9);
 
-rvText = fileread(fullfile(repoRoot,'code','multiuav_rvpath.m'));
-assert(contains(rvText,"'peakIndexToDelayConvention','(peakIndex-1)/fs'"));
+rvText = fileread(fullfile(repoRoot,'functions','rvpath_solve_rv.m'));
+assert(contains(rvText,"'peakIndexToDelayConvention'") && ...
+    contains(rvText,"'(peakIndex-1)/fs'"));
 for bandIndex = 1:3
-    expectedFormula = sprintf("rvDelay%d = (double(rvPeak%d(:).')-1)./fs;", ...
+    expectedFormula = sprintf("rvDelay%d = (double(rvPeak%d(:).') - 1) ./ fs;", ...
         bandIndex,bandIndex);
     assert(contains(rvText,expectedFormula));
 end

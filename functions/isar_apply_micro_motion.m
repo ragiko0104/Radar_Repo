@@ -7,7 +7,7 @@ function [targetsOut, settings] = isar_apply_micro_motion(targets, cfg)
 % coneSpin uses C(t)=C0*Ry(wp*t)*Rz(alpha)*Ry(ws*t), exactly the convention
 % of scatterermodel.createConicalMicroMotion. ws is the final Euler-factor
 % rate: omega dot the symmetry axis is ws+wp*cos(alpha), not simply ws.
-% Rotation is about the body origin (the original cone midpoint), not a
+% Rotation is about the body origin (the original ZXT midpoint), not a
 % fixed tip pivot. The tip is on the spin axis and stays fixed in spin mode.
 % Legacy callers with no new mode, or constantBodyRate, retain omegaBody_B.
 
