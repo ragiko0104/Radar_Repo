@@ -89,6 +89,9 @@ if isempty(rvRoot)
 end
 addpath(genpath(fullfile(rvRoot, 'code')));
 addpath(genpath(fullfile(rvRoot, 'functions')));
+if exist(fullfile(rvRoot, 'config'), 'dir') == 7
+    addpath(genpath(fullfile(rvRoot, 'config')));
+end
 
 paths = struct( ...
     'projectRoot', projectRoot, ...
