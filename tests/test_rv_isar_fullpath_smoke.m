@@ -9,9 +9,12 @@ run(fullfile(repoRoot,'startup_project.m'));
 
 % 1. Verify no duplicate local functions shadow matlab_research_lib
 localFuncs = dir(fullfile(repoRoot,'functions','**','*.m'));
-localNames = string({localFuncs.name});
-assert(isequal(localNames, "run_uav_existing_pipeline.m"), ...
-    'Unexpected local functions found in functions/: %s', strjoin(localNames, ', '));
+localStems = string(arrayfun(@(f) erase(f.name,'.m'), localFuncs, 'UniformOutput', false));
+libFuncs = dir(fullfile(matlab_research_lib_dir,'**','*.m'));
+libStems = string(arrayfun(@(f) erase(f.name,'.m'), libFuncs, 'UniformOutput', false));
+shadowed = intersect(localStems, libStems);
+assert(isempty(shadowed), ...
+    'Local functions must not duplicate matlab_research_lib: %s', strjoin(shadowed, ', '));
 
 % 2. 2-target chained RV (fastTimeExact) -> ISAR (stopAndGo) verification
 FULLPATH_OVERRIDES = struct('targetIndices', [1 2], 'isarNa', 16, 'isarEchoMode', "stopAndGo");

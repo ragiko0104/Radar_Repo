@@ -82,8 +82,45 @@ cfg_ISARpath.kr = (cfg_ISARpath.fH-cfg_ISARpath.fL)/cfg_ISARpath.Tr;
 cfg_ISARpath.fc = (cfg_ISARpath.fH+cfg_ISARpath.fL)/2;
 cfg_ISARpath.lambda = cfg_ISARpath.propagationSpeed/cfg_ISARpath.fc;
 cfg_ISARpath.startTimeSec = 0;                  % 成像孔径从绝对时刻 t=0 s 开始
-cfg_ISARpath.bodyRotationMode = "constantBodyRate";
-cfg_ISARpath.omegaBody_B = [0, 2*pi, 0];       % legacy：绕机体系 +y 轴以 2*pi rad/s 匀速转动
+% Caller example (frequencies are independent Euler rotation-factor rates):
+% ISAR_MOTION_OPTIONS = struct('Mode',"coneSpin",'SpinFrequencyHz',1, ...
+%     'PrecessionFrequencyHz',2,'PrecessionHalfAngleDeg',10);
+% Mode="spin" keeps the original body-y spin; "coneSpin" adds precession
+% about the initial body-y direction, with a fixed tilt about body z.
+cfg_ISARpath.bodyRotationMode = "spin";
+cfg_ISARpath.spinFrequencyHz = 1;
+cfg_ISARpath.precessionFrequencyHz = 1;
+cfg_ISARpath.precessionHalfAngleDeg = 10;
+if exist('ISAR_MOTION_OPTIONS','var') && ~isempty(ISAR_MOTION_OPTIONS)
+    motionOptionNames = {'Mode','SpinFrequencyHz', ...
+        'PrecessionFrequencyHz','PrecessionHalfAngleDeg'};
+    motionConfigNames = {'bodyRotationMode','spinFrequencyHz', ...
+        'precessionFrequencyHz','precessionHalfAngleDeg'};
+    if ~(isstruct(ISAR_MOTION_OPTIONS) && isscalar(ISAR_MOTION_OPTIONS)) || ...
+            any(~ismember(fieldnames(ISAR_MOTION_OPTIONS),motionOptionNames))
+        error('RadarProject:ISARMotion:InvalidOptions', ...
+            'ISAR_MOTION_OPTIONS contains an unsupported field.');
+    end
+    for motionOptionIndex = 1:numel(motionOptionNames)
+        motionOptionName = motionOptionNames{motionOptionIndex};
+        if isfield(ISAR_MOTION_OPTIONS,motionOptionName)
+            cfg_ISARpath.(motionConfigNames{motionOptionIndex}) = ...
+                ISAR_MOTION_OPTIONS.(motionOptionName);
+        end
+    end
+end
+cfg_ISARpath.omegaBody_B = [0,2*pi*cfg_ISARpath.spinFrequencyHz,0];
+% Optional shared ISARpath branches, applied at the original phase_cmp stage:
+% ISAR_POST_OPTIONS=struct('rangeAlignmentMode',"FRACTIONAL", ...
+%     'phaseCompensationMode',"MODEL_CA");
+% ISAR_PRIOR_ACCELERATION_MPS2 supplies one radial a per target for MODEL_CA.
+% Envelope prediction / dispersion remain the original CV model.
+if exist('ISAR_POST_OPTIONS','var') && ~isempty(ISAR_POST_OPTIONS)
+    cfg_ISARpath.postprocess=ISAR_POST_OPTIONS;
+end
+if exist('ISAR_PRIOR_ACCELERATION_MPS2','var') && ~isempty(ISAR_PRIOR_ACCELERATION_MPS2)
+    cfg_ISARpath.priorAccelerationMps2=ISAR_PRIOR_ACCELERATION_MPS2;
+end
 if cfg_ISARpath.Ta < cfg_ISARpath.T
     error("In ISARpath, Ta should be at least the same with T or larger\n");
 end

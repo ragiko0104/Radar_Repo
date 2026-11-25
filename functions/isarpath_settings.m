@@ -1,0 +1,23 @@
+function p=isarpath_settings(cfg)
+%ISARPATH_SETTINGS Shared, legacy-compatible ISARpath processing contract.
+p=struct('inputSampleRateHz',cfg.fs_scope,'timeWindowSamples',20000, ...
+    'rangeFftPoints',32768,'hrrfBins',1024,'timeMarginSamples',128, ...
+    'timeWindowMode',"FIXED_FIRST_PULSE",'cropCenterOffsetBinsEffective',110, ...
+    'rangeMigrationMode',"FFT2048_SINGLE",'rangeAlignmentMode',"INTEGER", ...
+    'rcmcCorrelationPoints',2048,'rcmcSearchRadiusBins',16, ...
+    'phaseCompensationMode',"VARIANCE_UNIT",'phaseThreshold',.12, ...
+    'dispersionCompensationEnabled',true,'windowType',"NO", ...
+    'slowTimeZeroPaddingFactor',8,'qualityEnabled',false);
+if isfield(cfg,'postprocess')
+    names=fieldnames(cfg.postprocess);
+    for j=1:numel(names)
+        assert(isfield(p,names{j}),'Unknown ISARpath postprocess option: %s',names{j});
+        p.(names{j})=cfg.postprocess.(names{j});
+    end
+end
+p.frequencyBinSpacingHz=p.inputSampleRateHz/p.rangeFftPoints;
+p.rangeBinSpacingM=cfg.propagationSpeed*p.frequencyBinSpacingHz/(2*cfg.kr);
+assert(ismember(p.rangeAlignmentMode,["INTEGER","FRACTIONAL"]));
+assert(ismember(p.phaseCompensationMode,["NONE","VARIANCE_UNIT","MODEL_CV","MODEL_CA"]));
+assert(p.rcmcCorrelationPoints==2*p.hrrfBins);
+end
