@@ -1,0 +1,47 @@
+# MATLAB temporary files
+*.asv
+*.m~
+*.autosave
+
+# MATLAB/Simulink generated files
+slprj/
+*.slxc
+*.mex*
+codegen/
+*_ert_rtw/
+*_grt_rtw/
+
+# Data and results
+data/
+echo/
+sim_data/
+exp_result/
+exp_data/
+datasets/
+results/
+output/
+outputs/
+cache/
+tmp/
+temp/
+.codex_tmp/
+
+# Generated images
+*.png
+
+# Large MATLAB files
+*.mat
+*.fig
+
+# Local machine-specific config
+local_config.m
+local_config.json
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor files
+.vscode/
+.idea/
