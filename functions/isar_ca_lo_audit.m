@@ -1,0 +1,6 @@
+function row = isar_ca_lo_audit(targetId,frameIndex,goldenBiasHz,prior)
+% Snapshot the prior used for this frame, not the initial truth or last loop index.
+row = struct('targetId',targetId,'frameIndex',frameIndex,'epochSec',prior.epochSec, ...
+    'rangeM',prior.rangeM,'goldenBiasHz',goldenBiasHz,'usedBiasHz',prior.beatOffsetHz, ...
+    'loStartSec',prior.loStartSec);
+end
