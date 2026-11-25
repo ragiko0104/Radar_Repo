@@ -1,4 +1,4 @@
-%TEST_RV_ISAR_FULLPATH_SMOKE Unattended end-to-end verification of RV + ISAR chain.
+%TEST_RV_ISAR_FULLPATH_SMOKE Verify external simCfg across runMode = "rv" / "isar" / "both".
 % RV always runs in fastTimeExact (required for intra-pulse Doppler velocity);
 % ISAR uses stopAndGo (fast-time frozen) for fast smoke verification.
 
@@ -16,42 +16,54 @@ shadowed = intersect(localStems, libStems);
 assert(isempty(shadowed), ...
     'Local functions must not duplicate matlab_research_lib: %s', strjoin(shadowed, ', '));
 
-% 2. 2-target chained RV (fastTimeExact) -> ISAR (stopAndGo) verification
-FULLPATH_OVERRIDES = struct('targetIndices', [1 2], 'isarNa', 16, 'isarEchoMode', "stopAndGo");
-run_RVpath = true;
-run_ISARpath = true;
-targetModelTypes = repmat("legacyDisk", 2, 1);
-rvShowEchoTimeFrequency = false;
-rvCfarPlotEnabled = false;
-ISAR_PLOT_ENABLED = false;
-ISAR_QUALITY_PRINT_ENABLED = false;
-UAV_PLOT_GEOMETRY_ENABLED = false;
+% Helper base external config (2 targets, 4-scatterer legacyDisk, plots off)
+baseCfg = rv_isar_default_config();
+baseCfg.targets.targetIndices            = [1 2];
+baseCfg.scatterer.modelTypes             = "legacyDisk";
+baseCfg.isar.Na                          = 16;
+baseCfg.isar.echoMode                    = "stopAndGo";
+baseCfg.switches.uavPlotGeometryEnabled  = false;
+baseCfg.switches.rvShowEchoTimeFrequency = false;
+baseCfg.switches.rvCfarPlotEnabled       = false;
+baseCfg.switches.isarPlotEnabled         = false;
+baseCfg.switches.isarQualityPrintEnabled = false;
 
+% 2. External runMode = "rv" (only RV_path runs)
+clearvars -except repoRoot baseCfg
+simCfg = baseCfg;
+simCfg.switches.runMode = "rv";
 run(fullfile(repoRoot,'code','multiuav_iasr_fullpath.m'));
-
-% Verify RV outputs (both raw and calibrated errors must be small under fastTimeExact)
-assert(exist('rvMeasurement','var') == 1);
-assert(all(rvMeasurement.matchedCount == 2), ...
-    'Expected 2 targets matched in RV path, got %d.', rvMeasurement.matchedCount(1));
-assert(rvMeasurement.maxRawRangeRelativeErrorPercent < 1.0, ...
-    'RV raw range error too large: %.4f%%', ...
-    rvMeasurement.maxRawRangeRelativeErrorPercent);
-assert(rvMeasurement.maxRawVelocityRelativeErrorPercent < 2.0, ...
-    'RV raw velocity error too large: %.4f%%', ...
+assert(exist('rvMeasurement','var') == 1, 'runMode="rv" must produce rvMeasurement.');
+assert(exist('isarPost','var') == 0, 'runMode="rv" must NOT run ISAR_path.');
+assert(all(rvMeasurement.matchedCount == 2));
+assert(rvMeasurement.maxRawRangeRelativeErrorPercent < 1.0);
+assert(rvMeasurement.maxRawVelocityRelativeErrorPercent < 2.0);
+fprintf('  [PASS] runMode="rv" (2/2 matched, raw R err %.4f%%, raw V err %.4f%%)\n', ...
+    rvMeasurement.maxRawRangeRelativeErrorPercent, ...
     rvMeasurement.maxRawVelocityRelativeErrorPercent);
-assert(rvMeasurement.maxCalibratedRangeRelativeErrorPercent < 1.0, ...
-    'RV calibrated range error too large: %.4f%%', ...
-    rvMeasurement.maxCalibratedRangeRelativeErrorPercent);
-assert(rvMeasurement.maxCalibratedVelocityRelativeErrorPercent < 1.0, ...
-    'RV calibrated velocity error too large: %.4f%%', ...
-    rvMeasurement.maxCalibratedVelocityRelativeErrorPercent);
 
-% Verify ISAR outputs and quality metrics
+% 3. External runMode = "isar" (only ISAR_path runs with truth priors)
+clearvars -except repoRoot baseCfg
+simCfg = baseCfg;
+simCfg.switches.runMode = "isar";
+run(fullfile(repoRoot,'code','multiuav_iasr_fullpath.m'));
+assert(exist('rvMeasurement','var') == 0, 'runMode="isar" must NOT run RV_path.');
 assert(exist('isarPost','var') == 1 && exist('isarQuality','var') == 1);
-assert(numel(isarPost.valid) == 2 && all(isarPost.valid), ...
-    'Both targets should produce valid ISAR images.');
-assert(height(isarQuality.summary) == 2);
-assert(all(isfinite(isarQuality.summary.ImageEntropy)));
-assert(all(isfinite(isarQuality.summary.Hrrf3dBAfterM)));
+assert(numel(isarPost.valid) == 2 && all(isarPost.valid));
+assert(height(isarQuality.summary) == 2 && all(isfinite(isarQuality.summary.ImageEntropy)));
+fprintf('  [PASS] runMode="isar" (2/2 valid ISAR images)\n');
 
-fprintf('RV (fastTimeExact) + ISAR (stopAndGo) smoke test passed (2/2 matched, 2/2 valid).\n');
+% 4. External runMode = "both" (chained RV -> ISAR)
+clearvars -except repoRoot baseCfg
+simCfg = baseCfg;
+simCfg.switches.runMode = "both";
+run(fullfile(repoRoot,'code','multiuav_iasr_fullpath.m'));
+assert(exist('rvMeasurement','var') == 1 && exist('isarPost','var') == 1);
+assert(all(rvMeasurement.matchedCount == 2));
+assert(rvMeasurement.maxCalibratedRangeRelativeErrorPercent < 1.0);
+assert(rvMeasurement.maxCalibratedVelocityRelativeErrorPercent < 1.0);
+assert(numel(isarPost.valid) == 2 && all(isarPost.valid));
+assert(all(isfinite(isarQuality.summary.Hrrf3dBAfterM)));
+fprintf('  [PASS] runMode="both" (2/2 RV matched -> 2/2 ISAR valid)\n');
+
+fprintf('RV + ISAR external-config smoke test passed across all 3 run modes.\n');

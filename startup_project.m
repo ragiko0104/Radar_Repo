@@ -6,7 +6,7 @@
 project_root = fileparts(mfilename('fullpath'));
 
 % Add existing project folders to MATLAB path
-project_subdirs = {'code', 'functions', 'tests'};
+project_subdirs = {'config', 'code', 'functions', 'tests'};
 for idx = 1:numel(project_subdirs)
     subdir_path = fullfile(project_root, project_subdirs{idx});
     if exist(subdir_path, 'dir') == 7

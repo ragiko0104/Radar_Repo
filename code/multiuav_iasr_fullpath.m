@@ -1,202 +1,215 @@
-% 测速测距 + ISAR 成像全链路仿真（基于 matlab_research_lib）
-% created by lms in 2026/07/13
-if isempty(which('radar.echo_generate_target_lfm'))
+% 测速测距 + ISAR 成像全链路执行脚本（参数与开关已独立至 config/rv_isar_default_config.m）
+% 调用方式：
+%   1. 推荐：通过 main.m 或外部脚本构造 simCfg = rv_isar_default_config()，
+%      设置 simCfg.switches.runMode = "rv" | "isar" | "both" 后再运行本脚本；
+%   2. 兼容：直接运行本脚本将自动加载默认配置，并兼容旧工作区覆盖变量。
+if isempty(which('radar.echo_generate_target_lfm')) || isempty(which('rv_isar_default_config'))
     run(fullfile(fileparts(fileparts(mfilename('fullpath'))), 'startup_project.m'));
 end
-%% 常量定义
-c = 3e8;
-Z = 50;                                         % 50Ω匹配负载
-q = 1.6e-19;                                    % 单位电荷
-lc = 1550e-9;       nu = c/lc;                  % 使用的光波长λ= 1550nm
-h = 6.62e-34;                                   % Planck常数h = 6.62e-34 J·S
-kB = 1.38e-23;                                  % Boltzmann常数kB = 1.38e-23 J/K
-T_exp = 300;                                    % 实验室温度T_exp = 27℃ = 300K
-Mach = 340;
-g = 10;
-win_G = 1;
-%% 开关定义（允许调用方在工作区预先覆盖）
+
+%% 加载并合并外部配置
+if exist('simCfg', 'var') && ~isempty(simCfg)
+    simCfg = rv_isar_default_config(simCfg);
+else
+    simCfg = rv_isar_default_config();
+end
+
+%% 常量导出
+c     = simCfg.constants.c;
+Z     = simCfg.constants.Z;
+q     = simCfg.constants.q;
+lc    = simCfg.constants.lc;
+nu    = c / lc;
+h     = simCfg.constants.h;
+kB    = simCfg.constants.kB;
+T_exp = simCfg.constants.T_exp;
+Mach  = simCfg.constants.Mach;
+g     = simCfg.constants.g;
+win_G = simCfg.constants.win_G;
+
+%% 运行模式与开关解析（支持外部 simCfg.switches.runMode 及旧工作区布尔开关）
+switch lower(string(simCfg.switches.runMode))
+    case "rv"
+        defaultRunRV   = true;
+        defaultRunISAR = false;
+    case "isar"
+        defaultRunRV   = false;
+        defaultRunISAR = true;
+    case "both"
+        defaultRunRV   = true;
+        defaultRunISAR = true;
+    otherwise
+        error('RV_ISAR_Path:InvalidRunMode', ...
+            'simCfg.switches.runMode 必须为 "rv"、"isar" 或 "both"，当前为 "%s"。', ...
+            string(simCfg.switches.runMode));
+end
+
 if ~exist('run_RVpath', 'var') || isempty(run_RVpath)
-    run_RVpath = false;
+    run_RVpath = defaultRunRV;
+else
+    run_RVpath = logical(run_RVpath);
 end
 if ~exist('run_ISARpath', 'var') || isempty(run_ISARpath)
-    run_ISARpath = true;
+    run_ISARpath = defaultRunISAR;
+else
+    run_ISARpath = logical(run_ISARpath);
 end
+if ~run_RVpath && ~run_ISARpath
+    warning('RV_ISAR_Path:NoPathSelected', ...
+        'run_RVpath 与 run_ISARpath 均为 false，本次未执行任何链路。');
+end
+
 if ~exist('UAV_PLOT_GEOMETRY_ENABLED', 'var') || isempty(UAV_PLOT_GEOMETRY_ENABLED)
-    UAV_PLOT_GEOMETRY_ENABLED = true;
+    UAV_PLOT_GEOMETRY_ENABLED = logical(simCfg.switches.uavPlotGeometryEnabled);
 end
-%% 目标运动参数定义
-%% 测量波形参数定义
-% fs = 64e9;
-cfg_RVpath = struct();
-cfg_RVpath.fs = 200e6;
-cfg_RVpath.Tr = 50e-6;
-cfg_RVpath.T_space = 5e-6;
-cfg_RVpath.T = 1.2e-3;
-cfg_RVpath.Ta = cfg_RVpath.T;
-cfg_RVpath.fc = 12.5e9;
-cfg_RVpath.f_space = 5e6;
-cfg_RVpath.B = [5, 7.5, 10]*1e6;
-cfg_RVpath.f1_up = 10e6;
-cfg_RVpath.Na = 1;
+if ~exist('rvShowEchoTimeFrequency', 'var') || isempty(rvShowEchoTimeFrequency)
+    rvShowEchoTimeFrequency = logical(simCfg.switches.rvShowEchoTimeFrequency);
+end
+if ~exist('rvTimeFrequencyPulseIndex', 'var') || isempty(rvTimeFrequencyPulseIndex)
+    rvTimeFrequencyPulseIndex = simCfg.switches.rvTimeFrequencyPulseIndex;
+end
+if ~exist('rvLfmSpectrumMode', 'var') || isempty(rvLfmSpectrumMode)
+    rvLfmSpectrumMode = simCfg.switches.rvLfmSpectrumMode;
+end
+if ~exist('rvCfarPlotEnabled', 'var') || isempty(rvCfarPlotEnabled)
+    rvCfarPlotEnabled = logical(simCfg.switches.rvCfarPlotEnabled);
+end
+if ~exist('rvCfarPlotPulseIndex', 'var') || isempty(rvCfarPlotPulseIndex)
+    rvCfarPlotPulseIndex = simCfg.switches.rvCfarPlotPulseIndex;
+end
+if ~exist('ISAR_PLOT_ENABLED', 'var') || isempty(ISAR_PLOT_ENABLED)
+    ISAR_PLOT_ENABLED = logical(simCfg.switches.isarPlotEnabled);
+end
+if ~exist('ISAR_PLOT_DYNAMIC_RANGE_DB', 'var') || isempty(ISAR_PLOT_DYNAMIC_RANGE_DB)
+    ISAR_PLOT_DYNAMIC_RANGE_DB = simCfg.switches.isarPlotDynamicRangeDb;
+end
+if ~exist('ISAR_QUALITY_ENABLED', 'var') || isempty(ISAR_QUALITY_ENABLED)
+    ISAR_QUALITY_ENABLED = logical(simCfg.switches.isarQualityEnabled);
+end
+if ~exist('ISAR_QUALITY_EXPECTED_PEAK_COUNT', 'var') || isempty(ISAR_QUALITY_EXPECTED_PEAK_COUNT)
+    ISAR_QUALITY_EXPECTED_PEAK_COUNT = simCfg.switches.isarQualityExpectedPeakCount;
+end
+if ~exist('ISAR_QUALITY_3DB_METHOD', 'var') || isempty(ISAR_QUALITY_3DB_METHOD)
+    ISAR_QUALITY_3DB_METHOD = simCfg.switches.isarQuality3dBMethod;
+end
+if ~exist('ISAR_QUALITY_PRINT_ENABLED', 'var') || isempty(ISAR_QUALITY_PRINT_ENABLED)
+    ISAR_QUALITY_PRINT_ENABLED = logical(simCfg.switches.isarQualityPrintEnabled);
+end
+
+%% 导出并校验 RV / ISAR 波形参数
+cfg_RVpath = simCfg.rv;
 if cfg_RVpath.Ta < cfg_RVpath.T
     error("In RVpath, Ta should be at least the same with T or larger\n");
 end
-% R/V cross-band consistency gate. The legacy optimized chain used fixed
-% gates c/min(B)/5 and 2/5*c/(2*Tr*fc), which are 12 m and 96 m/s for the
-% current waveform. The new default estimates each refined peak's effective
-% SINR from its local CFAR training cells, converts it to a delay-precision standard
-% deviation, and propagates the three delay uncertainties through the two
-% Cal_rv_mat solutions before matching them.
-cfg_RVpath.rvConsistency = struct( ...
-    'mode','snrPrecision', ...                 % snrPrecision / legacyResolution
-    'sigmaMultiplier',2, ...                  % two-sided consistency gate in sigma
-    'snrFloorDb',0, ...                       % numerical lower bound
-    'snrCeilingDb',60, ...                    % finite gate for noiseless simulation
-    'delayStdFloorBins',0.05, ...              % peak-fit/model precision floor
-    'noiseEstimator','localCfar', ...          % localCfar effective SINR / robustOffTarget
-    'biasCorrection','rankMedian', ...         % none / rankMedian
-    'maxPeakRankDifference',0, ...             % equal-range-order association
-    'enforceOneToOnePeakUse',true);            % prevent combinatorial duplicates
-%% 成像波形参数定义
-cfg_ISARpath = struct();
-cfg_ISARpath.fs = 1e9;
-cfg_ISARpath.Tr = 100e-6;
-cfg_ISARpath.T = 1e-3;
-cfg_ISARpath.Ta = 1e-3;
-cfg_ISARpath.fL = 11.8e9;
-cfg_ISARpath.fH = 17.8e9;
-cfg_ISARpath.Na = 32;
-if exist('FULLPATH_OVERRIDES', 'var') && isstruct(FULLPATH_OVERRIDES) && ...
-        isfield(FULLPATH_OVERRIDES, 'isarNa') && ~isempty(FULLPATH_OVERRIDES.isarNa)
-    cfg_ISARpath.Na = double(FULLPATH_OVERRIDES.isarNa);
-end
-cfg_ISARpath.fs_scope = 200e6;                  % FPGA/示波器侧去斜信号采样率
-cfg_ISARpath.echoMode = "fastTimeExact";        % 在快时间内更新动态散射点位置
-if exist('FULLPATH_OVERRIDES', 'var') && isstruct(FULLPATH_OVERRIDES) && ...
-        isfield(FULLPATH_OVERRIDES, 'isarEchoMode') && ~isempty(FULLPATH_OVERRIDES.isarEchoMode)
-    cfg_ISARpath.echoMode = string(FULLPATH_OVERRIDES.isarEchoMode);
+
+cfg_ISARpath = simCfg.isar;
+if exist('FULLPATH_OVERRIDES', 'var') && isstruct(FULLPATH_OVERRIDES)
+    if isfield(FULLPATH_OVERRIDES, 'isarNa') && ~isempty(FULLPATH_OVERRIDES.isarNa)
+        cfg_ISARpath.Na = double(FULLPATH_OVERRIDES.isarNa);
+    end
+    if isfield(FULLPATH_OVERRIDES, 'isarEchoMode') && ~isempty(FULLPATH_OVERRIDES.isarEchoMode)
+        cfg_ISARpath.echoMode = string(FULLPATH_OVERRIDES.isarEchoMode);
+    end
 end
 cfg_ISARpath.propagationSpeed = c;
-cfg_ISARpath.B = abs(cfg_ISARpath.fH-cfg_ISARpath.fL);
-cfg_ISARpath.kr = (cfg_ISARpath.fH-cfg_ISARpath.fL)/cfg_ISARpath.Tr;
-cfg_ISARpath.fc = (cfg_ISARpath.fH+cfg_ISARpath.fL)/2;
-cfg_ISARpath.lambda = cfg_ISARpath.propagationSpeed/cfg_ISARpath.fc;
-cfg_ISARpath.startTimeSec = 0;                  % 成像孔径从绝对时刻 t=0 s 开始
-% Caller example (frequencies are independent Euler rotation-factor rates):
-% ISAR_MOTION_OPTIONS = struct('Mode',"coneSpin",'SpinFrequencyHz',1, ...
-%     'PrecessionFrequencyHz',2,'PrecessionHalfAngleDeg',10);
-% Mode="spin" keeps the original body-y spin; "coneSpin" adds precession
-% about the initial body-y direction, with a fixed tilt about body z.
-cfg_ISARpath.bodyRotationMode = "spin";
-cfg_ISARpath.spinFrequencyHz = 1;
-cfg_ISARpath.precessionFrequencyHz = 1;
-cfg_ISARpath.precessionHalfAngleDeg = 10;
-if exist('ISAR_MOTION_OPTIONS','var') && ~isempty(ISAR_MOTION_OPTIONS)
+cfg_ISARpath.B      = abs(cfg_ISARpath.fH - cfg_ISARpath.fL);
+cfg_ISARpath.kr     = (cfg_ISARpath.fH - cfg_ISARpath.fL) / cfg_ISARpath.Tr;
+cfg_ISARpath.fc     = (cfg_ISARpath.fH + cfg_ISARpath.fL) / 2;
+cfg_ISARpath.lambda = cfg_ISARpath.propagationSpeed / cfg_ISARpath.fc;
+
+if exist('ISAR_MOTION_OPTIONS', 'var') && ~isempty(ISAR_MOTION_OPTIONS)
     motionOptionNames = {'Mode','SpinFrequencyHz', ...
         'PrecessionFrequencyHz','PrecessionHalfAngleDeg'};
     motionConfigNames = {'bodyRotationMode','spinFrequencyHz', ...
         'precessionFrequencyHz','precessionHalfAngleDeg'};
     if ~(isstruct(ISAR_MOTION_OPTIONS) && isscalar(ISAR_MOTION_OPTIONS)) || ...
-            any(~ismember(fieldnames(ISAR_MOTION_OPTIONS),motionOptionNames))
+            any(~ismember(fieldnames(ISAR_MOTION_OPTIONS), motionOptionNames))
         error('RadarProject:ISARMotion:InvalidOptions', ...
             'ISAR_MOTION_OPTIONS contains an unsupported field.');
     end
     for motionOptionIndex = 1:numel(motionOptionNames)
         motionOptionName = motionOptionNames{motionOptionIndex};
-        if isfield(ISAR_MOTION_OPTIONS,motionOptionName)
+        if isfield(ISAR_MOTION_OPTIONS, motionOptionName)
             cfg_ISARpath.(motionConfigNames{motionOptionIndex}) = ...
                 ISAR_MOTION_OPTIONS.(motionOptionName);
         end
     end
 end
-cfg_ISARpath.omegaBody_B = [0,2*pi*cfg_ISARpath.spinFrequencyHz,0];
-% Optional shared ISARpath branches, applied at the original phase_cmp stage:
-% ISAR_POST_OPTIONS=struct('rangeAlignmentMode',"FRACTIONAL", ...
-%     'phaseCompensationMode',"MODEL_CA");
-% ISAR_PRIOR_ACCELERATION_MPS2 supplies one radial a per target for MODEL_CA.
-% Envelope prediction / dispersion remain the original CV model.
-if exist('ISAR_POST_OPTIONS','var') && ~isempty(ISAR_POST_OPTIONS)
-    cfg_ISARpath.postprocess=ISAR_POST_OPTIONS;
+cfg_ISARpath.omegaBody_B = [0, 2*pi*cfg_ISARpath.spinFrequencyHz, 0];
+
+if exist('ISAR_POST_OPTIONS', 'var') && ~isempty(ISAR_POST_OPTIONS)
+    cfg_ISARpath.postprocess = ISAR_POST_OPTIONS;
+elseif isfield(cfg_ISARpath, 'postprocess') && isempty(fieldnames(cfg_ISARpath.postprocess))
+    cfg_ISARpath = rmfield(cfg_ISARpath, 'postprocess');
 end
-if exist('ISAR_PRIOR_ACCELERATION_MPS2','var') && ~isempty(ISAR_PRIOR_ACCELERATION_MPS2)
-    cfg_ISARpath.priorAccelerationMps2=ISAR_PRIOR_ACCELERATION_MPS2;
+if exist('ISAR_PRIOR_ACCELERATION_MPS2', 'var') && ~isempty(ISAR_PRIOR_ACCELERATION_MPS2)
+    cfg_ISARpath.priorAccelerationMps2 = ISAR_PRIOR_ACCELERATION_MPS2;
+elseif isfield(cfg_ISARpath, 'priorAccelerationMps2') && isempty(cfg_ISARpath.priorAccelerationMps2)
+    cfg_ISARpath = rmfield(cfg_ISARpath, 'priorAccelerationMps2');
 end
 if cfg_ISARpath.Ta < cfg_ISARpath.T
     error("In ISARpath, Ta should be at least the same with T or larger\n");
 end
+
 %% 其余仿真参数定义
-% R0 = (2:11)'*100;
-% v_Mach = ones(10, 1);
-% a_g = zeros(10, 1);
-R0 = [10050;20050;30050;40050;50050;65050;75050;85050;100050;120050];
-v_Mach = ones(10, 1)*10.2*sqrt(2);
-a_g = [-15, -12, -11, -10.8, -10.6, -10.3, -10.2, -10.1, -10.1, -10.1]'*sqrt(2);
+R0     = simCfg.targets.R0(:);
+v_Mach = simCfg.targets.v_Mach(:);
+a_g    = simCfg.targets.a_g(:);
+if ~(numel(R0) == numel(v_Mach) && numel(R0) == numel(a_g))
+    error('RV_ISAR_Path:TargetVectorLengthMismatch', ...
+        'simCfg.targets 的 R0(%d)、v_Mach(%d)、a_g(%d) 长度必须一致。', ...
+        numel(R0), numel(v_Mach), numel(a_g));
+end
+
+idxKeep = simCfg.targets.targetIndices;
 if exist('FULLPATH_OVERRIDES', 'var') && isstruct(FULLPATH_OVERRIDES) && ...
         isfield(FULLPATH_OVERRIDES, 'targetIndices') && ~isempty(FULLPATH_OVERRIDES.targetIndices)
-    idxKeep = FULLPATH_OVERRIDES.targetIndices(:);
-    R0 = R0(idxKeep);
+    idxKeep = FULLPATH_OVERRIDES.targetIndices;
+end
+if ~isempty(idxKeep)
+    idxKeep = idxKeep(:);
+    R0     = R0(idxKeep);
     v_Mach = v_Mach(idxKeep);
-    a_g = a_g(idxKeep);
+    a_g    = a_g(idxKeep);
 end
 n_Targets = numel(R0);
+
 %% 目标散射体模型加载
-% 每个物理目标都将在 motion 定义后转换为统一 scatterermodel target。
-% targetModelTypes 可以是单个字符串或 n_Targets 个字符串，从而允许异构场景：
-%   "uav"             - 参数化无人机刚体+旋翼散射点；
-%   "legacyDisk"      - 旧 nPoint/r/theta0 圆周四小球或多小球模型；
-%   "rigidPointCloud" - 调用方给定的三维刚体点云；
-%   "point"           - 单散射点目标；
-%   "projectedRange"  - 已有逐脉冲 tgt_posr，仅支持 stop-and-go。
-if ~exist('targetModelTypes','var') || isempty(targetModelTypes)
-    targetModelTypes = repmat("uav", n_Targets, 1);
+if ~exist('targetModelTypes', 'var') || isempty(targetModelTypes)
+    targetModelTypes = simCfg.scatterer.modelTypes;
+end
+targetModelTypes = string(targetModelTypes(:));
+if isscalar(targetModelTypes)
+    targetModelTypes = repmat(targetModelTypes, n_Targets, 1);
+elseif numel(targetModelTypes) ~= n_Targets
+    error('targetModelTypes 必须是标量或包含 n_Targets(%d) 个元素。', n_Targets);
 end
 
-% 可选的参数化无人机散射点模板：
-%   cfg_quad_small          - Phantom 4 类小型四旋翼，默认 6000 RPM，适合小型消费级无人机目标。
-%   cfg_quad_heavy          - M350 类重型四旋翼，默认 3600 RPM，适合较大机身和桨叶的工业级无人机目标。
-%   cfg_hex_heavy           - M600 类重型六旋翼，默认 3200 RPM，适合六旋翼载荷无人机目标。
-%   cfg_hybrid_vtol_4plus1  - TX25A-like 复合翼 4+1 VTOL 参数模型，不代表精确厂商 CAD；
-%       "hover"             - 四个升力旋翼高速旋转，机头拉进旋翼停止，表示悬停模式；
-%       "transition"        - 升力旋翼由 2400 RPM 降至 0，拉进旋翼由 0 升至 3000 RPM，表示转换模式；
-%       "cruise"            - 升力旋翼停止，机头拉进旋翼以 3000 RPM 旋转，表示固定翼巡航模式。
-% 前三种模板默认采用恒定 RPM；目标的 hover/linear/accelerated/yawScan 等刚体运动由 motion 另行定义。
-% 复合翼模式选择示例：uavConfig = uavmodel.configs.cfg_hybrid_vtol_4plus1("transition");
-uavConfig = uavmodel.configs.cfg_quad_small();
-model = uavmodel.createModel(uavConfig);
-
-% legacy 与通用刚体点云的默认示例参数；实际研究中可替换这些模板和复系数。
-% Geometry and deterministic complex field reflectivity share one spec.
-% Ntip~=0 selects the cone; Ntip==0 selects four body x-z-plane spheres.
-legacyDiskSpec = struct('Ntip',1,'radiusM',0.3,'phase0Rad',pi/6, ...
-    'axialSeparationM',1.5,'alpha0',[1;0.3;0.3;0.3]);
-% Equivalent to the first-generation R0_body_to_world convention after
-% mapping its +y LOS onto this script's +x LOS while preserving radar up:
-% body-x/body-y/body-z make [135,45,90] deg with LOS, respectively.
-legacyDiskInitialAttitudeYprRad = [-3*pi/4,0,0];
-rigidPointCloud_B = [0.20,0,0; 0,0.20,0; -0.20,0,0; 0,-0.20,0];
-rigidPointCloudAlpha0 = legacyDiskSpec.alpha0;
-singlePointAlpha0 = 1;
-projectedRangeOffsetM = zeros(cfg_RVpath.Na, 1);
-projectedRangePulseTimeSec = (0:cfg_RVpath.Na-1).' .* cfg_RVpath.T;
-
-% 仅当场景使用 UAV 且允许绘图时绘制 t=0 s 机体系散射点几何。
-if any(strcmpi(targetModelTypes, "uav")) && UAV_PLOT_GEOMETRY_ENABLED
-    uavmodel.plotGeometry(model, 0, struct( ...
-        'ShowLabels', true, 'ShowFrame', true, 'ShowRotorNormals', true));
+if any(strcmpi(targetModelTypes, "uav"))
+    uavConfig = simCfg.scatterer.uavConfigFcn();
+    model = uavmodel.createModel(uavConfig);
+    if UAV_PLOT_GEOMETRY_ENABLED
+        uavmodel.plotGeometry(model, 0, struct( ...
+            'ShowLabels', true, 'ShowFrame', true, 'ShowRotorNormals', true));
+    end
 end
+
+legacyDiskSpec                  = simCfg.scatterer.legacyDiskSpec;
+legacyDiskInitialAttitudeYprRad = simCfg.scatterer.legacyDiskInitialAttitudeYprRad;
+rigidPointCloud_B               = simCfg.scatterer.rigidPointCloud_B;
+rigidPointCloudAlpha0           = simCfg.scatterer.rigidPointCloudAlpha0;
+singlePointAlpha0               = simCfg.scatterer.singlePointAlpha0;
+projectedRangeOffsetM           = zeros(cfg_RVpath.Na, 1);
+projectedRangePulseTimeSec      = (0:cfg_RVpath.Na-1).' .* cfg_RVpath.T;
 
 %% 目标运动模型与雷达状态定义
-% 当前令惯性系 I 与雷达坐标系 R 的坐标轴平行，雷达初始位置为原点。
-% LOS 从雷达指向目标，默认沿雷达系 +x；距离率为正表示目标远离雷达。
-losHat_R = [1, 0, 0];
+losHat_R = simCfg.targets.losHat_R(:).';
 losHat_R = losHat_R ./ norm(losHat_R);
 
-% 雷达运动设置入口。方向为 [0,0,0] 且速度为 0 时表示雷达静止；
-% 若设置运动雷达，请同时给出非零方向和非负速度，当前假设雷达做匀速直线运动。
-radarPosition0_I = [0, 0, 0];
-radarReferenceTimeSec = 0;
-radarMotionDirection_R = [0, 0, 0];
-radarSpeedMps = 0;
+radarPosition0_I      = simCfg.targets.radarPosition0_I(:).';
+radarReferenceTimeSec = simCfg.targets.radarReferenceTimeSec;
+radarMotionDirection_R = simCfg.targets.radarMotionDirection_R(:).';
+radarSpeedMps         = simCfg.targets.radarSpeedMps;
 if norm(radarMotionDirection_R) == 0
     if radarSpeedMps ~= 0
         error('非零雷达速度必须配合非零 radarMotionDirection_R。');
@@ -210,32 +223,25 @@ radarVelocity_I = radarSpeedMps .* radarMotionDirectionHat_R;
 radarState = struct();
 radarState.position_I = @(tQuery) radarPosition0_I + ...
     (double(tQuery(:)) - radarReferenceTimeSec) .* radarVelocity_I;
-radarState.velocity_I = radarVelocity_I;
+radarState.velocity_I         = radarVelocity_I;
 radarState.carrierFrequencyHz = cfg_RVpath.fc;
-radarState.wavelengthM = c ./ cfg_RVpath.fc;
-radarState.dopplerSign = -1;  % fD=-2*rangeRate/lambda，接近雷达时多普勒为正。
-radarState.polarization = 'VV';
+radarState.wavelengthM        = c ./ cfg_RVpath.fc;
+radarState.dopplerSign        = simCfg.targets.dopplerSign;
+radarState.polarization       = simCfg.targets.polarization;
 
-% 通过两个角度设置目标正速度/正加速度所对应的公共运动方向：
-%   targetMotionLosAngleDeg       - 与 +LOS（雷达系 +x）的夹角；
-%       0 deg 表示沿 +x 远离，90 deg 表示横向运动，180 deg 表示沿 -x 接近。
-%   targetMotionAzimuthDeg        - 横向分量绕 LOS 的方位角；
-%       0 deg 指向雷达系 +y，90 deg 指向雷达系 +z。
-targetMotionLosAngleDeg = 45;
-targetMotionAzimuthDeg = 0;
+targetMotionLosAngleDeg = simCfg.targets.motionLosAngleDeg;
+targetMotionAzimuthDeg  = simCfg.targets.motionAzimuthDeg;
 targetMotionLosAngleRad = targetMotionLosAngleDeg .* pi ./ 180;
-targetMotionAzimuthRad = targetMotionAzimuthDeg .* pi ./ 180;
+targetMotionAzimuthRad  = targetMotionAzimuthDeg .* pi ./ 180;
 
 losSideHat_R = [0, 1, 0];
-losUpHat_R = [0, 0, 1];
+losUpHat_R   = [0, 0, 1];
 targetMotionDirectionHat_R = cos(targetMotionLosAngleRad) .* losHat_R + ...
-    sin(targetMotionLosAngleRad) .* (...
+    sin(targetMotionLosAngleRad) .* ( ...
     cos(targetMotionAzimuthRad) .* losSideHat_R + ...
     sin(targetMotionAzimuthRad) .* losUpHat_R);
-targetMotionDirectionHat_R = targetMotionDirectionHat_R ./ ...
-    norm(targetMotionDirectionHat_R);
+targetMotionDirectionHat_R = targetMotionDirectionHat_R ./ norm(targetMotionDirectionHat_R);
 
-% 换算后的单位运动矢量及其与雷达系 x/y/z 三轴的夹角，顺序为 [x,y,z]。
 targetMotionAngleXYZRad = acos(max(-1, min(1, targetMotionDirectionHat_R)));
 targetMotionAngleXYZDeg = targetMotionAngleXYZRad .* 180 ./ pi;
 fprintf('目标运动单位方向矢量（雷达系）：[%.6f, %.6f, %.6f]\n', ...
@@ -245,29 +251,20 @@ fprintf('目标运动方向与雷达系 x/y/z 轴夹角：[%.3f, %.3f, %.3f] deg
     targetMotionAngleXYZDeg(1), targetMotionAngleXYZDeg(2), ...
     targetMotionAngleXYZDeg(3));
 
-% 将以 Mach/g 表示的理论真值转换到 SI，并沿公共运动方向构造三维状态。
-targetSpeed0Mps = v_Mach(:) .* Mach;
+targetSpeed0Mps        = v_Mach(:) .* Mach;
 targetAccelerationMps2 = a_g(:) .* g;
-targetPosition0_I = radarPosition0_I + R0(:) .* losHat_R;
-initialLosProjection = dot(targetMotionDirectionHat_R,losHat_R);
-v_radial0 = targetSpeed0Mps .* initialLosProjection - ...
-    radarVelocity_I * losHat_R.';
-a_radial = targetAccelerationMps2 .* initialLosProjection;
+targetPosition0_I      = radarPosition0_I + R0(:) .* losHat_R;
+initialLosProjection   = dot(targetMotionDirectionHat_R, losHat_R);
+v_radial0              = targetSpeed0Mps .* initialLosProjection - radarVelocity_I * losHat_R.';
+a_radial               = targetAccelerationMps2 .* initialLosProjection;
 
-% The monostatic radar remains fixed.  Preserve only the t=0 LOS
-% projections of target velocity and acceleration in the target-centre
-% motion; do not introduce a transverse centre trajectory.
-targetVelocity0_I = v_radial0 .* losHat_R;
+targetVelocity0_I     = v_radial0 .* losHat_R;
 targetAcceleration0_I = a_radial .* losHat_R;
 
-% Echo truth contains radial acceleration.  The downstream range predictor
-% intentionally remains linear, R + v_r*t, and leaves this residual to RCMC.
-motionPulseTimeSec = (0:cfg_ISARpath.Na-1).' .* cfg_ISARpath.Ta;
-motionTrueCenterRangeM = R0(:).' + ...
-    motionPulseTimeSec .* v_radial0(:).' + ...
+motionPulseTimeSec          = (0:cfg_ISARpath.Na-1).' .* cfg_ISARpath.Ta;
+motionTrueCenterRangeM      = R0(:).' + motionPulseTimeSec .* v_radial0(:).' + ...
     0.5 .* motionPulseTimeSec.^2 .* a_radial(:).';
-motionLinearPredictedRangeM = R0(:).' + ...
-    motionPulseTimeSec .* v_radial0(:).';
+motionLinearPredictedRangeM = R0(:).' + motionPulseTimeSec .* v_radial0(:).';
 initialLosMotionDiagnostics = struct( ...
     'model',"fixedRadar_initialLos_radialAccelerationTruth_linearPrediction", ...
     'initialLosHat',losHat_R, ...
@@ -277,13 +274,12 @@ initialLosMotionDiagnostics = struct( ...
     'pulseTimeSec',motionPulseTimeSec, ...
     'trueCenterRangeM',motionTrueCenterRangeM, ...
     'linearPredictedRangeM',motionLinearPredictedRangeM, ...
-    'accelerationResidualM',motionTrueCenterRangeM-motionLinearPredictedRangeM, ...
+    'accelerationResidualM',motionTrueCenterRangeM - motionLinearPredictedRangeM, ...
     'maximumTransverseVelocityMps',max(vecnorm( ...
-        targetVelocity0_I-(targetVelocity0_I*losHat_R.').*losHat_R,2,2)), ...
+        targetVelocity0_I - (targetVelocity0_I*losHat_R.').*losHat_R, 2, 2)), ...
     'maximumTransverseAccelerationMps2',max(vecnorm( ...
-        targetAcceleration0_I-(targetAcceleration0_I*losHat_R.').*losHat_R,2,2)));
+        targetAcceleration0_I - (targetAcceleration0_I*losHat_R.').*losHat_R, 2, 2)));
 
-% 每个目标使用同一个散射点结构模板，但具有独立的质心运动真值。
 motion = repmat(struct('type', 'accelerated', 'referenceTimeSec', 0, ...
     'p0_I', [0, 0, 0], 'v0_I', [0, 0, 0], 'a0_I', [0, 0, 0], ...
     'attitude0YprRad', [0, 0, 0]), n_Targets, 1);
@@ -294,12 +290,6 @@ for targetIndex = 1:n_Targets
 end
 
 %% 将几何模板和运动状态组合成统一散射体 target 数组
-targetModelTypes = string(targetModelTypes(:));
-if isscalar(targetModelTypes)
-    targetModelTypes = repmat(targetModelTypes, n_Targets, 1);
-elseif numel(targetModelTypes) ~= n_Targets
-    error('targetModelTypes 必须是标量或包含 n_Targets 个元素。');
-end
 targetCells = cell(n_Targets, 1);
 for targetIndex = 1:n_Targets
     targetName = sprintf('target%02d_%s', targetIndex, targetModelTypes(targetIndex));
@@ -312,28 +302,30 @@ for targetIndex = 1:n_Targets
             legacyMotion = motion(targetIndex);
             legacyMotion.attitude0YprRad = legacyDiskInitialAttitudeYprRad;
             targetCells{targetIndex} = scatterermodel.createLegacyDiskTarget( ...
-                legacyDiskSpec,legacyMotion,struct('Name',targetName));
+                legacyDiskSpec, legacyMotion, struct('Name',targetName));
         case "rigidpointcloud"
             targetCells{targetIndex} = scatterermodel.createRigidPointCloudTarget( ...
-                rigidPointCloud_B,rigidPointCloudAlpha0,motion(targetIndex), ...
+                rigidPointCloud_B, rigidPointCloudAlpha0, motion(targetIndex), ...
                 struct('Name',targetName));
         case "point"
             targetCells{targetIndex} = scatterermodel.createPointTarget( ...
-                motion(targetIndex),singlePointAlpha0,struct('Name',targetName));
+                motion(targetIndex), singlePointAlpha0, struct('Name',targetName));
         case "projectedrange"
             targetCells{targetIndex} = scatterermodel.createProjectedRangeTarget( ...
-                projectedRangeOffsetM,singlePointAlpha0,motion(targetIndex), ...
-                projectedRangePulseTimeSec,struct('Name',targetName));
+                projectedRangeOffsetM, singlePointAlpha0, motion(targetIndex), ...
+                projectedRangePulseTimeSec, struct('Name',targetName));
         otherwise
             error('不支持的 targetModelTypes(%d)="%s"。', ...
-                targetIndex,targetModelTypes(targetIndex));
+                targetIndex, targetModelTypes(targetIndex));
     end
 end
 targets = vertcat(targetCells{:});
-%% 运动参数测量
+
+%% 运动参数测量（RV_path）
 if run_RVpath
     multiuav_rvpath;
 end
+
 %% 运动参数传递
 if run_RVpath
     R_isar = rvMeasurement.calibratedRangeM;
@@ -343,7 +335,7 @@ else
     v_isar = v_radial0;
 end
 
-%% ISAR 成像
+%% ISAR 成像（ISAR_path）
 if run_ISARpath
     multiuav_isarpath;
 end
